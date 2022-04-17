@@ -1,4 +1,4 @@
-package ctc
+package main
 
 import (
 	"encoding/hex"
@@ -40,14 +40,13 @@ const genesisKey = "genesis"
 const latestBatchHashKey = "latestBatchHash"
 
 func (ctc *CanonicalTransactionContract) Init(ctx contractapi.TransactionContextInterface) error {
-	genesisKeyHash := crypto.Keccak256([]byte(genesisKey))
-	existingGenesisBatch, err := ctx.GetStub().GetState(hex.EncodeToString(genesisKeyHash))
+	existingGenesisBatchHash, err := ctx.GetStub().GetState(genesisKey)
 	if err != nil {
 		return fmt.Errorf("failed to check if genesis batch already exists in world state. Error: %s", err.Error())
 	}
 
-	if existingGenesisBatch == nil {
-		return fmt.Errorf("genesis batch already exists in world state.")
+	if existingGenesisBatchHash != nil {
+		return fmt.Errorf("genesis batch already exists in world state")
 	}
 
 	//setup genesis block and latestBatchHash
@@ -62,14 +61,18 @@ func (ctc *CanonicalTransactionContract) Init(ctx contractapi.TransactionContext
 		PrevBatchHash: nil,
 	}
 
-	genesisBatchJSON, _ := json.Marshal(genesisBatch)
-
-	err = ctx.GetStub().PutState(hex.EncodeToString(genesisKeyHash), genesisBatchJSON)
+	genesisBatchJSON, err := json.Marshal(genesisBatch); 
 	if err != nil {
 		return fmt.Errorf("failed to add genesis batch into world state. Error: %s", err.Error())
 	}
 
-	err = ctx.GetStub().PutState(latestBatchHashKey, genesisKeyHash)
+	err = ctx.GetStub().PutState(genesisKey, genesisBatchJSON)
+	if err != nil {
+		return fmt.Errorf("failed to add genesis batch into world state. Error: %s", err.Error())
+	}
+
+	genesisBatchHash := crypto.Keccak256(genesisBatchJSON)
+	err = ctx.GetStub().PutState(latestBatchHashKey, genesisBatchHash)
 	if err != nil {
 		return fmt.Errorf("failed to add latestBatchHash into world state. Error: %s", err.Error())
 	}
@@ -91,7 +94,7 @@ func (ctc *CanonicalTransactionContract) PublishToState(ctx contractapi.Transact
 	}
 
 	if latestBatchHash == nil {
-		return fmt.Errorf("Latest batch hash not found. Are you sure you have called Init()?")
+		return fmt.Errorf("latest batch hash does not exist in world state. Are you sure you called Init()?")
 	}
 
 	//TODO: check if prevStateHash matches newStateHash of latest batch
@@ -104,13 +107,23 @@ func (ctc *CanonicalTransactionContract) PublishToState(ctx contractapi.Transact
 		PrevBatchHash: latestBatchHash,
 	}
 
-	if batchJSON, err := json.Marshal(batchReadyForCommit); err == nil {
-		batchHash := crypto.Keccak256(batchJSON)
-
-		return ctx.GetStub().PutState(hex.EncodeToString(batchHash), batchJSON)
-	} else {
+	batchJSON, err := json.Marshal(batchReadyForCommit)
+	if err != nil {
 		return fmt.Errorf("failed to marshal batch struct. Error: %s", err.Error())
 	}
+
+	batchHash := crypto.Keccak256(batchJSON)
+	err = ctx.GetStub().PutState(hex.EncodeToString(batchHash), batchJSON)
+	if err != nil {
+		return fmt.Errorf("failed to add batch into world state. Error: %s", err.Error())
+	}
+
+	err = ctx.GetStub().PutState(latestBatchHashKey, batchHash)
+	if err != nil {
+		return fmt.Errorf("failed to add latestBatchHash into world state. Error: %s", err.Error())
+	}
+
+	return nil;
 }
 
 func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.TransactionContextInterface) (string, error) {
@@ -118,12 +131,19 @@ func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.Transac
 
 	//TODO: handle errors
 
-	latestBatchHash, _ := ctx.GetStub().GetState("latestBatchHash")
+	latestBatchHash, err := ctx.GetStub().GetState(latestBatchHashKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to check if latestBatchKey already exists in world state. Error: %s", err.Error())
+	}
+
 	if latestBatchHash == nil {
 		return "", fmt.Errorf("latest batch hash does not exist in world state. Are you sure you called Init()?")
 	}
 
-	rawBatch, _ := ctx.GetStub().GetState(hex.EncodeToString(latestBatchHash))
+	rawBatch, err := ctx.GetStub().GetState(hex.EncodeToString(latestBatchHash))
+	if err != nil {
+		return "", fmt.Errorf("failed to check if latest batch already exists in world state. Error: %s", err.Error())
+	}
 
 	for rawBatch != nil {
 		var batch BatchReadyForCommit
@@ -135,6 +155,12 @@ func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.Transac
 
 	return strings.Join(history, ";"), nil
 }
+
+func (ctc *CanonicalTransactionContract) DeleteBatchChain (ctx contractapi.TransactionContextInterface) {
+	ctx.GetStub().DelState(genesisKey);
+	ctx.GetStub().DelState(latestBatchHashKey);
+}
+
 
 func main() {
 	chaincode, err := contractapi.NewChaincode(new(CanonicalTransactionContract))
