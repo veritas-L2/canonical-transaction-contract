@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
@@ -36,70 +35,23 @@ type BatchReadyForCommit struct {
 	PrevBatchHash []byte            `json:"prevBatchHash"`
 }
 
-const genesisKey = "genesis"
 const latestBatchHashKey = "latestBatchHash"
 
-func (ctc *CanonicalTransactionContract) Init(ctx contractapi.TransactionContextInterface) error {
-	existingGenesisBatchHash, err := ctx.GetStub().GetState(genesisKey)
-	if err != nil {
-		return fmt.Errorf("failed to check if genesis batch already exists in world state. Error: %s", err.Error())
-	}
-
-	if existingGenesisBatchHash != nil {
-		return fmt.Errorf("genesis batch already exists in world state")
-	}
-
-	//setup genesis block and latestBatchHash
-
-	//Thought: we probably do not need a genesis batch, a batch that comes in when no latest batch hash exists can
-	//serve as the genesis batch
-	genesisBatch := BatchReadyForCommit{
-		Timestamp:     time.Now().Unix(),
-		Transactions:  []TransactionInfo{},
-		PrevStateHash: nil,
-		NewStateHash:  nil,
-		PrevBatchHash: nil,
-	}
-
-	genesisBatchJSON, err := json.Marshal(genesisBatch); 
-	if err != nil {
-		return fmt.Errorf("failed to add genesis batch into world state. Error: %s", err.Error())
-	}
-
-	err = ctx.GetStub().PutState(genesisKey, genesisBatchJSON)
-	if err != nil {
-		return fmt.Errorf("failed to add genesis batch into world state. Error: %s", err.Error())
-	}
-
-	genesisBatchHash := crypto.Keccak256(genesisBatchJSON)
-	err = ctx.GetStub().PutState(latestBatchHashKey, genesisBatchHash)
-	if err != nil {
-		return fmt.Errorf("failed to add latestBatchHash into world state. Error: %s", err.Error())
-	}
-
-	// are state changes atomic?
-
-	return nil
-}
-
-func (ctc *CanonicalTransactionContract) PublishToState(ctx contractapi.TransactionContextInterface, payload string) error {
+func (ctc *CanonicalTransactionContract) CommitBatch(ctx contractapi.TransactionContextInterface, payload string) error {
 	var batch Batch
 	if err := json.Unmarshal([]byte(payload), &batch); err != nil {
 		return fmt.Errorf("failed to unmarshal batch payload. Error: %s", err.Error())
 	}
 
+	var batchReadyForCommit BatchReadyForCommit;
+
 	latestBatchHash, err := ctx.GetStub().GetState(latestBatchHashKey)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve latest batch hash from world state. Error: %s", err.Error())
-	}
-
-	if latestBatchHash == nil {
-		return fmt.Errorf("latest batch hash does not exist in world state. Are you sure you called Init()?")
+		return fmt.Errorf("failed to check if latestBatchKey already exists in world state. Error: %s", err.Error())
 	}
 
 	//TODO: check if prevStateHash matches newStateHash of latest batch
-
-	batchReadyForCommit := BatchReadyForCommit{
+	batchReadyForCommit = BatchReadyForCommit {
 		Timestamp:     batch.Timestamp,
 		Transactions:  batch.Transactions,
 		PrevStateHash: batch.PrevStateHash,
@@ -122,9 +74,9 @@ func (ctc *CanonicalTransactionContract) PublishToState(ctx contractapi.Transact
 	if err != nil {
 		return fmt.Errorf("failed to add latestBatchHash into world state. Error: %s", err.Error())
 	}
-
 	return nil;
 }
+
 
 func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.TransactionContextInterface) (string, error) {
 	var history []string
@@ -137,7 +89,7 @@ func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.Transac
 	}
 
 	if latestBatchHash == nil {
-		return "", fmt.Errorf("latest batch hash does not exist in world state. Are you sure you called Init()?")
+		return "", fmt.Errorf("latest batch hash does not exist in world state. Are you sure you added a batch?")
 	}
 
 	rawBatch, err := ctx.GetStub().GetState(hex.EncodeToString(latestBatchHash))
@@ -157,7 +109,6 @@ func (ctc *CanonicalTransactionContract) GetBatchHistory(ctx contractapi.Transac
 }
 
 func (ctc *CanonicalTransactionContract) DeleteBatchChain (ctx contractapi.TransactionContextInterface) {
-	ctx.GetStub().DelState(genesisKey);
 	ctx.GetStub().DelState(latestBatchHashKey);
 }
 
